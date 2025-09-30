@@ -1,0 +1,19 @@
+#本shell脚本用于一键提交或者拉去，不用一个一个输入命令
+
+git init
+
+git branch -M gradle-tooling-api
+
+git remote add origin https://github.com/android-zeros/ZeroStudio-gradle-tooling-api.git
+git add .
+
+git commit -m "push-update：下载全部gradle-tooling-api的source与javadoc jar文件，pom文件"
+
+#git pull origin gradle-tooling-api
+
+git push  origin gradle-tooling-api
+
+#配置git
+#  git config --global user.name "你的用户名"
+#  git config --global user.email "你的邮箱"
+#验证配置：git config --list
