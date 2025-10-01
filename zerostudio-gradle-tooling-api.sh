@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
+
 #
 #English translation：
-#version 2.1
-#2.1 version Improved Producer: android_zero (零丶)
+#version 2.2
+#2.2 version Improved Producer: android_zero (零丶)
 #illustrate: 
 # 1. Batch download: Change from a single download version to a multi-version queue, and download all required version files to the queue one by one.
 # 2. Check for empty files: Check for 0-byte blank files and skip them if they exist
@@ -37,11 +38,12 @@ set -eu
 
 # 初始化基础配置
 script_dir=$(dirname $(realpath $0))
-group=android.zero.studio.gradle.toolingapi
+group=io.github.android-zeros
 artifactId=gradle-tooling-api
-serverId=ossrh
-PUBLISH_URL=https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/
-DOWNLOAD_BASE_URL="https://repo.gradle.org/gradle/libs-releases/org/gradle/$artifactId"
+serverId=github
+PUBLISH_URL=https://maven.pkg.github.com/android-zeros/ZeroStudio-gradle-tooling-api
+DOWNLOAD_BASE_URL="https://repo.gradle.org/libs-releases/org/gradle/$artifactId"
+
 
 # 定义需要下载和发布的所有版本（队列）
 declare -a ALL_VERSIONS=(
@@ -145,43 +147,68 @@ if ! [[ -f "$script_dir/pom.xml.in" ]]; then
     exit 1
 fi
 
-# ======================== 核心新增：文件存在性校验函数 ========================
-# 功能：检测单个文件URL是否存在（避免下载不存在的文件）
+# ======================== 核心修复1：精准远程文件存在性校验 ========================
+# 功能：检测远程文件是否存在（仅200状态码视为存在，404直接返回不存在）
 # 参数：$1 = 文件URL
-# 返回：0=文件存在，1=文件不存在（404+目标错误JSON），2=网络异常
+# 返回：0=存在，1=不存在，2=网络异常
 check_file_exist() {
     local file_url="$1"
-    local temp_response="/tmp/file_check_response.tmp"  # 临时存储响应内容
-
-    # 发送HEAD请求（轻量，仅获取响应头，不下载文件），超时10秒，重试2次
-    if ! curl -s -I -L --max-time 10 --retry 2 "$file_url" -o "$temp_response" 2>/dev/null; then
-        rm -f "$temp_response"
-        return 2  # 网络异常（超时/连接失败）
+    # 发送HEAD请求（轻量），超时10秒，重试2次，仅保留状态码
+    local http_status=$(curl -s -I -L --max-time 10 --retry 2 "$file_url" | grep -oE '^HTTP/[0-9.]+ [0-9]+' | awk '{print $2}')
+    
+    if [[ -z "$http_status" ]]; then
+        return 2  # 无响应 → 网络异常
+    elif [[ "$http_status" -eq 200 ]]; then
+        return 0  # 200 → 文件存在
+    elif [[ "$http_status" -eq 404 ]]; then
+        return 1  # 404 → 文件不存在
+    else
+        return 2  # 其他状态码（500等）→ 网络异常
     fi
+}
 
-    # 提取HTTP状态码（如200=存在，404=不存在）
-    local http_status=$(grep -oE '^HTTP/[0-9.]+ [0-9]+' "$temp_response" | awk '{print $2}')
-
-    # 情况1：状态码200 → 文件存在
-    if [[ "$http_status" -eq 200 ]]; then
-        rm -f "$temp_response"
-        return 0
+# ======================== 核心修复2：优化本地文件完整性检查 ========================
+# 功能：检查本地文件是否存在且非0字节
+# 参数：$1 = 文件基础路径（不含后缀）
+# 返回：0=完整，1=不完整
+check_local_files() {
+    local file_base="$1"
+    # 只检查核心文件（jar必选，sources/javadoc可选，存在则需非0字节）
+    local required_file="${file_base}.jar"
+    
+    # 1. 必选jar文件不存在 → 不完整
+    if ! [[ -f "$required_file" ]]; then
+        return 1
     fi
-
-    # 情况2：状态码404 → 进一步检查响应体是否为目标错误JSON
-    if [[ "$http_status" -eq 404 ]]; then
-        # 下载响应体（仅404时下载，内容少，不耗时）
-        local response_body=$(curl -s -L --max-time 10 "$file_url" 2>/dev/null)
-        # 匹配错误特征：包含"status" : 404 和 "Could not find resource"
-        if echo "$response_body" | grep -q '"status" : 404' && echo "$response_body" | grep -q 'Could not find resource'; then
-            rm -f "$temp_response"
-            return 1  # 确认文件不存在（目标404错误）
+    
+    # 2. 必选jar文件为0字节 → 不完整
+    if [[ "$(uname)" == "Darwin" ]]; then
+        jar_size=$(stat -f "%z" "$required_file")
+    else
+        jar_size=$(stat -c "%s" "$required_file")
+    fi
+    if [[ $jar_size -eq 0 ]]; then
+        rm -f "$required_file"  # 删除0字节jar，避免重复判断
+        return 1
+    fi
+    
+    # 3. 可选文件（sources/javadoc）存在则需非0字节
+    for optional_suffix in "-sources.jar" "-javadoc.jar"; do
+        local optional_file="${file_base}${optional_suffix}"
+        if [[ -f "$optional_file" ]]; then
+            if [[ "$(uname)" == "Darwin" ]]; then
+                opt_size=$(stat -f "%z" "$optional_file")
+            else
+                opt_size=$(stat -c "%s" "$optional_file")
+            fi
+            if [[ $opt_size -eq 0 ]]; then
+                rm -f "$optional_file"  # 删除0字节可选文件
+            fi
         fi
-    fi
-
-    # 其他情况（如500服务器错误）→ 按网络异常处理
-    rm -f "$temp_response"
-    return 2
+    done
+    
+    # 所有检查通过 → 完整
+    return 0
 }
 
 # 遍历所有版本，执行下载+发布
@@ -198,141 +225,148 @@ for DOWNLOAD_VERSION in "${ALL_VERSIONS[@]}"; do
     PUBLISH_VERSION="$DOWNLOAD_VERSION"
     
     # 定义文件路径
-    download_dir="$script_dir/target/libs-releases/org/gradle/$artifactId/$DOWNLOAD_VERSION"
+    download_dir="$script_dir/target/android/zero/studio/gradle/tooling-api/$artifactId/$DOWNLOAD_VERSION"
     file_base="$download_dir/$artifactId-$DOWNLOAD_VERSION"
     mkdir -p "$download_dir"
     
-    # 1. 先检查本地文件是否完整（复用原有逻辑）
-    download_success=false
-    zero_byte_retry=1
-    retry_count=3
-
-    check_files() {
-        local has_zero_byte=0
-        for file in "$file_base.jar" "$file_base-sources.jar" "$file_base-javadoc.jar"; do
-            if [[ -f "$file" ]]; then
-                if [[ "$(uname)" == "Darwin" ]]; then
-                    file_size=$(stat -f "%z" "$file")
-                else
-                    file_size=$(stat -c "%s" "$file")
-                fi
-                if [[ $file_size -eq 0 ]]; then
-                    echo "警告：检测到0字节文件，将删除并重新下载：$file"
-                    rm -f "$file"
-                    has_zero_byte=1
-                fi
-            else
-                has_zero_byte=1
-            fi
-        done
-        [[ $has_zero_byte -eq 0 ]] && return 0 || return 1
-    }
-
-    if check_files; then
-        echo "文件已存在且完整，跳过下载：$DOWNLOAD_VERSION"
+    # ======================== 步骤1：检查本地文件，完整则直接跳过下载 ========================
+    if check_local_files "$file_base"; then
+        echo "✅ 本地文件已完整，跳过下载：$DOWNLOAD_VERSION"
         download_success=true
     else
-        # ======================== 核心改进：下载前先校验远程文件是否存在 ========================
-        echo "开始校验远程文件是否存在（版本：$DOWNLOAD_VERSION）"
-        local jar_url="$DOWNLOAD_BASE_URL/$DOWNLOAD_VERSION/$artifactId-$DOWNLOAD_VERSION.jar"
-        local sources_url="$DOWNLOAD_BASE_URL/$DOWNLOAD_VERSION/$artifactId-$DOWNLOAD_VERSION-sources.jar"
-        local javadoc_url="$DOWNLOAD_BASE_URL/$DOWNLOAD_VERSION/$artifactId-$DOWNLOAD_VERSION-javadoc.jar"
-        local missing_files=()
-
-        # 逐个校验3个文件的远程存在性
-        for url in "$jar_url" "$sources_url" "$javadoc_url"; do
-            file_name=$(basename "$url")
+        download_success=false
+        
+        # ======================== 步骤2：校验远程文件，确定要下载的文件列表 ========================
+        echo "🔍 校验远程文件存在性（版本：$DOWNLOAD_VERSION）"
+        # 定义3个文件的URL和路径
+        declare -A files=(
+            ["jar"]="$DOWNLOAD_BASE_URL/$DOWNLOAD_VERSION/$artifactId-$DOWNLOAD_VERSION.jar|$file_base.jar"
+            ["sources"]="$DOWNLOAD_BASE_URL/$DOWNLOAD_VERSION/$artifactId-$DOWNLOAD_VERSION-sources.jar|$file_base-sources.jar"
+            ["javadoc"]="$DOWNLOAD_BASE_URL/$DOWNLOAD_VERSION/$artifactId-$DOWNLOAD_VERSION-javadoc.jar|$file_base-javadoc.jar"
+        )
+         to_download=()  # 存储需要下载的文件（URL|本地路径）
+         missing_count=0
+        
+        for type in "${!files[@]}"; do
+            IFS='|' read -r url local_path <<< "${files[$type]}"
             if check_file_exist "$url"; then
-                echo "✅ 远程文件存在：$file_name"
+                to_download+=("${files[$type]}")
+                echo "✅ 远程存在：$type 文件"
             else
-                local check_result=$?
-                if [[ $check_result -eq 1 ]]; then
-                    echo "❌ 远程文件不存在（404）：$file_name → 跳过该文件下载"
-                    missing_files+=("$file_name")
+                 check_res=$?
+                if [[ $check_res -eq 1 ]]; then
+                    echo "❌ 远程404：$type 文件不存在，跳过"
+                    missing_count=$((missing_count + 1))
+                    # 删除本地残留的该类型0字节文件（若有）
+                    [[ -f "$local_path" ]] && rm -f "$local_path"
                 else
-                    echo "⚠️  远程文件校验失败（网络异常）：$file_name → 将尝试下载"
+                    echo "⚠️  网络异常：$type 文件校验失败，尝试下载"
+                    to_download+=("${files[$type]}")
                 fi
             fi
         done
+        
+        # 若jar文件不存在（必选），直接跳过当前版本
+         has_jar=false
+       # 遍历to_download数组，检查是否包含jar文件
+       for file_info in "${to_download[@]}"; do
+          if [[ "$file_info" =~ "|$artifactId-$DOWNLOAD_VERSION.jar" ]]; then
+             has_jar=true
+           break
+          fi
+       done
+      # 核心判断：要么3个文件都缺失，要么有缺失且没有jar文件 → 跳过版本
+      if [[ $missing_count -eq 3 || (! $has_jar && $missing_count -ge 1) ]]; then
+          echo "❌ 核心jar文件不存在，跳过版本：$DOWNLOAD_VERSION"
+               current_index=$((current_index + 1))
+          continue
+      fi
 
-        # 若3个文件都不存在 → 直接跳过当前版本（不执行下载）
-        if [[ ${#missing_files[@]} -eq 3 ]]; then
-            echo "警告：版本 $DOWNLOAD_VERSION 的3个核心文件均不存在，跳过下载"
-            current_index=$((current_index + 1))
-            continue
-        fi
 
-        # 2. 原有下载逻辑（仅下载存在的远程文件）
-        # 处理0字节重试
-        if [[ $zero_byte_retry -gt 0 ]]; then
-            echo "开始处理0字节文件，重新下载版本 $DOWNLOAD_VERSION"
-            local download_ok=1
-            # 仅下载远程存在的文件
-            [[ ! " ${missing_files[@]} " =~ " $(basename "$jar_url") " ]] && wget "$jar_url" -O "$file_base.jar" || download_ok=0
-            [[ ! " ${missing_files[@]} " =~ " $(basename "$sources_url") " ]] && wget "$sources_url" -O "$file_base-sources.jar" || true
-            [[ ! " ${missing_files[@]} " =~ " $(basename "$javadoc_url") " ]] && wget "$javadoc_url" -O "$file_base-javadoc.jar" || true
+        
+        # ======================== 步骤3：下载需要的文件，跳过404，删除0字节 ========================
+        echo "📥 开始下载（共${#to_download[@]}个文件）"
+         download_failed=0
+        for file_info in "${to_download[@]}"; do
+            IFS='|' read -r url local_path <<< "$file_info"
+            file_type=$(basename "$local_path" | grep -oE '(-sources|-javadoc)\.jar$' || echo ".jar")
             
-            if [[ $download_ok -eq 1 && check_files ]]; then
-                echo "0字节文件修复成功：$DOWNLOAD_VERSION"
-                download_success=true
-                zero_byte_retry=0
-            else
-                echo "0字节文件修复失败，进行常规重试"
-                zero_byte_retry=0
-            fi
-        fi
-
-        # 常规下载重试
-        while [[ $retry_count -gt 0 && $download_success == false ]]; do
-            echo "常规下载重试 $((4 - retry_count))/3：$DOWNLOAD_VERSION"
-            local download_ok=1
-            [[ ! " ${missing_files[@]} " =~ " $(basename "$jar_url") " ]] && wget "$jar_url" -O "$file_base.jar" || download_ok=0
-            [[ ! " ${missing_files[@]} " =~ " $(basename "$sources_url") " ]] && wget "$sources_url" -O "$file_base-sources.jar" || true
-            [[ ! " ${missing_files[@]} " =~ " $(basename "$javadoc_url") " ]] && wget "$javadoc_url" -O "$file_base-javadoc.jar" || true
+            # 下载前删除旧文件（避免覆盖不完整文件）
+            [[ -f "$local_path" ]] && rm -f "$local_path"
             
-            if [[ $download_ok -eq 1 && check_files ]]; then
-                echo "常规下载成功：$DOWNLOAD_VERSION"
-                download_success=true
+            # 执行下载（超时30秒，重试2次）
+            if wget --timeout=30 --tries=2 "$url" -O "$local_path" -q; then
+                # 下载后检查是否为0字节
+                if [[ "$(uname)" == "Darwin" ]]; then
+                    file_size=$(stat -f "%z" "$local_path")
+                else
+                    file_size=$(stat -c "%s" "$local_path")
+                fi
+                if [[ $file_size -eq 0 ]]; then
+                    echo "⚠️  下载到0字节文件，删除：$local_path"
+                    rm -f "$local_path"
+                    download_failed=1
+                else
+                    echo "✅ 下载成功：$local_path"
+                fi
             else
-                retry_count=$((retry_count - 1))
-                echo "下载失败，5秒后重试（剩余：$retry_count）"
-                sleep 5
+                echo "❌ 下载失败：$local_path"
+                download_failed=1
             fi
         done
+        
+        # 检查下载结果（jar文件必须成功，其他可选）
+        if [[ -f "${file_base}.jar" ]]; then
+            download_success=true
+            echo "📥 版本 $DOWNLOAD_VERSION 下载完成（jar文件已获取）"
+        else
+            download_success=false
+            echo "❌ 版本 $DOWNLOAD_VERSION 下载失败（核心jar文件缺失）"
+        fi
     fi
 
-    # 下载失败跳过
-    if [[ $download_success == false ]]; then
-        echo "警告：版本 $DOWNLOAD_VERSION 下载失败，跳过发布"
-        current_index=$((current_index + 1))
-        continue
-    fi
 
-    # 2. 生成POM文件（不变）
-    pom_file="$download_dir/pom-$DOWNLOAD_VERSION.xml"
-    cp "$script_dir/pom.xml.in" "$pom_file"
-    sed -i "s|@@GROUP@@|$group|g" "$pom_file"
-    sed -i "s|@@ARTIFACT@@|$artifactId|g" "$pom_file"
-    sed -i "s|@@VERSION@@|$PUBLISH_VERSION|g" "$pom_file"
-    echo "生成POM文件：$pom_file"
+    sonatype_group_path=$(echo "$group" | tr '.' '/')
+    sonatype_url="$PUBLISH_URL/${sonatype_group_path}/${artifactId}/${PUBLISH_VERSION}/"
+    # ======================== 步骤4：下载成功则生成POM并发布 ========================
+    if [[ $download_success == true ]]; then
+        # 生成POM文件
+        pom_file="$download_dir/pom-$DOWNLOAD_VERSION.xml"
+        cp "$script_dir/pom.xml.in" "$pom_file"
+        sed -i "s|@@GROUP@@|$group|g" "$pom_file"
+        sed -i "s|@@ARTIFACT@@|$artifactId|g" "$pom_file"
+        sed -i "s|@@VERSION@@|$PUBLISH_VERSION|g" "$pom_file"
+        echo "📝 生成POM文件：$pom_file"
 
-    # 3. 发布（不变）
-    echo "开始发布版本 $PUBLISH_VERSION"
-    if mvn gpg:sign-and-deploy-file -e \
-        -Durl="$PUBLISH_URL" \
-        -DrepositoryId="$serverId" \
-        -Dfile="$file_base.jar" \
-        -Dsources="$file_base-sources.jar" \
-        -Djavadoc="$file_base-javadoc.jar" \
-        -DpomFile="$pom_file" \
-        -DgroupId="$group" \
-        -DartifactId="$artifactId" \
-        -Dversion="$PUBLISH_VERSION" \
-        -Dpackaging=jar \
-        -DrepositoryLayout=default; then
-        echo "发布成功：$PUBLISH_VERSION"
+        # 执行发布（跳过缺失的sources/javadoc文件）
+        echo "🚀 开始发布版本 $PUBLISH_VERSION"
+        # 注意：每行末尾的\必须是最后一个字符，后面不能有任何空格！
+         mvn_cmd="mvn gpg:sign-and-deploy-file -e \
+           -Durl=\"$PUBLISH_URL\" \
+           -DrepositoryId=\"$serverId\" \
+           -Dfile=\"$file_base.jar\" \
+           -DpomFile=\"$pom_file\" \
+           -DgroupId=\"$group\" \
+           -DartifactId=\"$artifactId\" \
+           -Dversion=\"$PUBLISH_VERSION\" \
+           -Dpackaging=jar \
+           -DrepositoryLayout=default \
+           -Dgpg.useAgent=true \
+           -Dgpg.passphrase=\"输入你的gpg密码\""
+        
+        # 若sources文件存在，添加到发布命令
+        [[ -f "${file_base}-sources.jar" ]] && mvn_cmd+=" -Dsources=\"${file_base}-sources.jar\""
+        # 若javadoc文件存在，添加到发布命令
+        [[ -f "${file_base}-javadoc.jar" ]] && mvn_cmd+=" -Djavadoc=\"${file_base}-javadoc.jar\""
+        
+        # 执行发布命令
+        if eval "$mvn_cmd"; then
+            echo "✅ 发布成功：$sonatype_url"
+        else
+            echo "❌ 发布失败：$PUBLISH_VERSION"
+        fi
     else
-        echo "警告：版本 $PUBLISH_VERSION 发布失败"
+        echo "⚠️  版本 $DOWNLOAD_VERSION 跳过发布（下载未完成）"
     fi
 
     current_index=$((current_index + 1))
@@ -341,6 +375,5 @@ done
 # 完成提示
 echo -e "\n=================================================="
 echo "所有版本处理完成！共处理 $total_versions 个版本"
-echo "下载文件存放于：$script_dir/target/libs-releases/org/gradle/$artifactId/"
-echo "成功/失败详情请查看日志"
+echo "下载文件存放于：$script_dir/target/android/zero/studio/gradle/tooling-api/$artifactId/"
 echo "=================================================="

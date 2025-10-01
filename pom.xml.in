@@ -19,7 +19,8 @@
         <license>
             <name>The GNU General Public License, v3.0</name>
             <url>https://www.gnu.org/licenses/gpl-3.0.en.html</url>
-            <distribution>https://www.gnu.org/licenses/gpl-3.0.en.html</distribution>
+            <distribution>repo</distribution>
+            <comments>GPL-3.0 Open Source License</comments>
         </license>
     </licenses>
 
@@ -36,12 +37,13 @@
         <developerConnection>scm:git:ssh://git@github.com/android-zeros/@@ARTIFACT@@.git
         </developerConnection>
         <url>https://github.com/android-zeros/@@ARTIFACT@@</url>
+        <tag>HEAD</tag>
     </scm>
 
     <distributionManagement>
         <repository>
-            <id>sonatype-nexus</id>
-            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+          <id>github</id>
+          <url>https://maven.pkg.github.com/android-zeros/ZeroStudio-gradle-tooling-api</url>
         </repository>
     </distributionManagement>
 

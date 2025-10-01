@@ -1,0 +1,11 @@
+        <repository>
+          <id>central</id>
+          <url>https://repo.maven.apache.org/maven2</url>
+        </repository>
+        <repository>
+          <id>github</id>
+          <url>https://maven.pkg.github.com/android-zeros/ZeroStudio-gradle-tooling-api</url>
+            <snapshots>
+               <enabled>true</enabled>
+            </snapshots>
+        </repository>
