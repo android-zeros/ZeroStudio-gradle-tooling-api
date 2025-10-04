@@ -1,0 +1,214 @@
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Maven 仓库管理页面">
+    <title>Maven 仓库管理</title>
+    <!-- 引入 Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css">
+    <!-- 引入 ECharts 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.2/dist/echarts.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(45deg, #e0e0e0, #f0f0f0);
+            /* 视差滚动背景 */
+            perspective: 1px;
+            transform-style: preserve-3d;
+            overflow-x: hidden;
+            overflow-y: auto;
+        }
+        /* 玻璃拟态效果 */
+        .glassmorphism {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        /* 导航头部样式 */
+        .navbar {
+            background: rgba(255, 255, 255, 0.2);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+        }
+        .container {
+            margin-top: 30px;
+        }
+        .repo-list {
+            margin-top: 20px;
+            /* 瀑布流布局 */
+            column-count: 3;
+            column-gap: 20px;
+        }
+        .repo-item {
+            padding: 10px;
+            border: 1px solid #ddd;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            /* 确保每个项目不会跨列 */
+            break-inside: avoid;
+            background: rgba(255, 255, 255, 0.2);
+            transition: all 0.3s ease;
+        }
+        .repo-item:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+        }
+        .repo-item a {
+            text-decoration: none;
+        }
+        /* ECharts 图表容器 */
+        #tree-chart {
+            width: 100%;
+            height: 400px;
+            margin-top: 20px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航头部 -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-transparent glassmorphism">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">Maven 仓库管理</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link active" aria-current="page" href="#">主页</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#">关于</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container glassmorphism p-4">
+        <h1 class="text-center">Maven 仓库管理</h1>
+        <p class="text-center">欢迎访问 Maven 仓库管理页面。您可以在这里浏览和下载已上传的包。</p>
+
+        <!-- 搜索框 -->
+        <div class="row">
+            <div class="col-md-6 offset-md-3">
+                <input type="text" id="search" class="form-control" placeholder="搜索 Maven 包..." onkeyup="filterRepos()">
+            </div>
+        </div>
+
+        <!-- 仓库列表 -->
+        <div class="repo-list">
+            <div class="repo-item">
+                <span>com.example:sample-project:1.0.0</span>
+                <a href="https://repo.maven.apache.org/maven2/com/example/sample-project/1.0.0/sample-project-1.0.0.jar" target="_blank" class="btn btn-primary">下载</a>
+            </div>
+            <div class="repo-item">
+                <span>org.example:another-project:2.1.3</span>
+                <a href="https://repo.maven.apache.org/maven2/org/example/another-project/2.1.3/another-project-2.1.3.jar" target="_blank" class="btn btn-primary">下载</a>
+            </div>
+            <div class="repo-item">
+                <span>com.example:awesome-lib:3.2.0</span>
+                <a href="https://repo.maven.apache.org/maven2/com/example/awesome-lib/3.2.0/awesome-lib-3.2.0.jar" target="_blank" class="btn btn-primary">下载</a>
+            </div>
+        </div>
+
+        <!-- ECharts 树图 -->
+        <div id="tree-chart"></div>
+    </div>
+
+    <script>
+        // 搜索功能
+        function filterRepos() {
+            let input = document.getElementById("search").value.toLowerCase();
+            let items = document.getElementsByClassName("repo-item");
+
+            Array.from(items).forEach(function(item) {
+                let text = item.textContent.toLowerCase();
+                if (text.indexOf(input) !== -1) {
+                    item.style.display = "flex";
+                } else {
+                    item.style.display = "none";
+                }
+            });
+        }
+
+        // 初始化 ECharts 树图
+        var myChart = echarts.init(document.getElementById('tree-chart'));
+        // 示例数据
+        var treeData = {
+            name: 'Maven 仓库',
+            children: [
+                {
+                    name: 'com.example',
+                    children: [
+                        { name: 'sample-project:1.0.0' },
+                        { name: 'awesome-lib:3.2.0' }
+                    ]
+                },
+                {
+                    name: 'org.example',
+                    children: [
+                        { name: 'another-project:2.1.3' }
+                    ]
+                }
+            ]
+        };
+        var option = {
+            tooltip: {
+                trigger: 'item',
+                triggerOn: 'mousemove'
+            },
+            series: [
+                {
+                    type: 'tree',
+                    data: [treeData],
+                    top: '10%',
+                    left: '20%',
+                    bottom: '10%',
+                    right: '20%',
+                    symbol: 'circle',
+                    symbolSize: 7,
+                    label: {
+                        position: 'left',
+                        verticalAlign: 'middle',
+                        align: 'right'
+                    },
+                    leaves: {
+                        label: {
+                            position: 'right',
+                            verticalAlign: 'middle',
+                            align: 'left'
+                        }
+                    },
+                    expandAndCollapse: true,
+                    animationDuration: 550,
+                    animationDurationUpdate: 750
+                }
+            ]
+        };
+        myChart.setOption(option);
+        // 响应式布局
+        window.addEventListener('resize', function () {
+            myChart.resize();
+        });
+
+        // 视差滚动效果
+        document.body.onscroll = function () {
+            var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+            document.body.style.backgroundPosition = `0 ${scrollTop * 0.5}px`;
+        };
+    </script>
+
+    <!-- Bootstrap JS (可选) -->
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.min.js"></script>
+</body>
+</html>
